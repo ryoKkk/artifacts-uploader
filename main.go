@@ -5,10 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,92 +28,78 @@ func init() {
 	flag.StringVar(&username, "username", "", "nexus login username")
 	flag.StringVar(&password, "password", "", "nexus login user password")
 	flag.Parse()
+	es := make([]string, 0, 4)
 	if remote == "" {
-		panic("[remote] nexus repository name should not be empty")
+		es = append(es, "[remote] nexus repository name should not be empty")
 	}
 	if local == "" {
-		panic("[local] maven repository path should not be empty")
+		es = append(es, "[local] maven repository path should not be empty")
 	}
 	if username == "" {
-		panic("[username] of nexus should not be empty")
+		es = append(es, "[username] of nexus should not be empty")
 	}
 	if password == "" {
-		panic("[password] of nexus user should not be empty")
+		es = append(es, "[password] of nexus user should not be empty")
+	}
+	if len(es) > 0 {
+		panic(strings.Join(es, "\n"))
 	}
 }
 
 func main() {
 	rest := host + "/service/rest/v1/components?repository=" + remote
 	asmap := artifactmap(local)
+	// var wg sync.WaitGroup
 	for key, files := range asmap {
 		if len(files) == 1 && strings.HasSuffix(files[0], ".jar") {
 			delete(asmap, key)
 		} else {
-			/**
-			req, err := http.NewRequest("POST", rest, nil)
-			req.SetBasicAuth(username, password)
-			if err != nil {
-				panic(err)
-			}
-			req.Header.Add("accept", "application/json")
-			req.Header.Add("Content-Type", "multipart/form-data")
-			form := url.Values{"maven2.generate-pom": []string{"false"}}
-			for i, f := range files {
-				count := i + 1
-				if strings.HasSuffix(f, ".pom") {
-					form.Add(fmt.Sprintf("maven2.asset%d", count), "@"+f)
-					form.Add(fmt.Sprintf("maven2.asset%d.extension", count), "pom")
-				} else if strings.HasSuffix(f, ".jar") {
-					form.Add(fmt.Sprintf("maven2.asset%d", count), "@"+f+";type=application/java-archive")
-					form.Add(fmt.Sprintf("maven2.asset%d.extension", count), "jar")
-				}
-			}
-			req.PostForm = form
-			fmt.Println(req.PostForm)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				panic(err)
-			}
-			fmt.Println(resp.Status)
-			body, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				panic(err)
-			}
-			fmt.Println(string(body))
-			defer resp.Body.Close()
-			*/
-			body := &bytes.Buffer{}
-			writer := multipart.NewWriter(body)
-			form := url.Values{}
-			for i, f := range files {
-				file, _ := os.Open(f)
-				defer file.Close()
-				count := i + 1
-				if strings.HasSuffix(f, ".pom") {
-					part, _ := writer.CreateFormFile(fmt.Sprintf("maven2.asset%d", count), filepath.Base(file.Name()))
-					io.Copy(part, file)
-					form.Add(fmt.Sprintf("maven2.asset%d.extension", count), "pom")
-				} else if strings.HasSuffix(f, ".jar") {
-					part, _ := writer.CreateFormFile(fmt.Sprintf("maven2.asset%d", count), filepath.Base(file.Name()))
-					io.Copy(part, file)
-					form.Add(fmt.Sprintf("maven2.asset%d.extension", count), "jar")
-				}
-			}
-			writer.Close()
-			r, _ := http.NewRequest("POST", rest, body)
-			r.Header.Add("Content-Type", writer.FormDataContentType())
-			client := &http.Client{}
-			resp, err := client.Do(r)
-			if err != nil {
-				panic(err)
-			}
-			respbody, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				panic(err)
-			}
-			fmt.Println(string(respbody))
-			defer resp.Body.Close()
+			upload(rest, files)
+			// wg.Add(1)
 		}
+	}
+	// wg.Wait()
+}
+
+func upload(endpoint string, files []string) error {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	for i, f := range files {
+		file, _ := os.Open(f)
+		defer file.Close()
+		count := i + 1
+		if strings.HasSuffix(f, ".pom") {
+			part, _ := writer.CreateFormFile(fmt.Sprintf("maven2.asset%d", count), filepath.Base(file.Name()))
+			io.Copy(part, file)
+			pom, _ := writer.CreateFormField(fmt.Sprintf("maven2.asset%d.extension", count))
+			pom.Write([]byte("pom"))
+		} else if strings.HasSuffix(f, ".jar") {
+			part, _ := writer.CreateFormFile(fmt.Sprintf("maven2.asset%d", count), filepath.Base(file.Name()))
+			io.Copy(part, file)
+			jar, _ := writer.CreateFormField(fmt.Sprintf("maven2.asset%d.extension", count))
+			jar.Write([]byte("jar"))
+		}
+	}
+	writer.Close()
+	r, _ := http.NewRequest("POST", endpoint, body)
+	r.Header.Add("Content-Type", writer.FormDataContentType())
+	r.SetBasicAuth(username, password)
+	client := &http.Client{}
+	resp, err := client.Do(r)
+	if err != nil {
+		msg := "failed in sending request: " + err
+		return
+	}
+	defer resp.Body.Close()
+	statusCode := resp.StatusCode
+	if statusCode >= 200 && statusCode < 300 {
+		fmt.Println("file(s) uploaded successfully: ", files)
+	} else if statusCode >= 400 && statusCode < 400 {
+		fmt.Println("server error 4XX: ", resp)
+	} else if statusCode == 500 {
+		fmt.Println("server error 500: ", resp)
+	} else {
+		fmt.Println("unknown response: ", resp)
 	}
 }
 
