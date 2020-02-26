@@ -49,19 +49,16 @@ func init() {
 func main() {
 	rest := host + "/service/rest/v1/components?repository=" + remote
 	asmap := artifactmap(local)
-	// var wg sync.WaitGroup
 	for key, files := range asmap {
 		if len(files) == 1 && strings.HasSuffix(files[0], ".jar") {
 			delete(asmap, key)
 		} else {
 			upload(rest, files)
-			// wg.Add(1)
 		}
 	}
-	// wg.Wait()
 }
 
-func upload(endpoint string, files []string) error {
+func upload(endpoint string, files []string) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	for i, f := range files {
@@ -87,8 +84,7 @@ func upload(endpoint string, files []string) error {
 	client := &http.Client{}
 	resp, err := client.Do(r)
 	if err != nil {
-		msg := "failed in sending request: " + err
-		return
+		panic(fmt.Sprintf("failed in sending request: %s", err))
 	}
 	defer resp.Body.Close()
 	statusCode := resp.StatusCode
